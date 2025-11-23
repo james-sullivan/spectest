@@ -12,9 +12,14 @@ logger = logging.getLogger(__name__)
 class OutputFormatter:
     """Format and display results to terminal."""
 
-    def __init__(self):
-        """Initialize the output formatter."""
+    def __init__(self, verbose: bool = False):
+        """Initialize the output formatter.
+
+        Args:
+            verbose: Whether to show all output messages (default: False)
+        """
         self.console = Console()
+        self.verbose = verbose
 
     def print_header(self, model: str, n_scenarios: int):
         """
@@ -132,11 +137,13 @@ class OutputFormatter:
         """
         self.console.print(f"[bold yellow]Warning:[/bold yellow] {message}")
 
-    def print_info(self, message: str):
+    def print_info(self, message: str, force: bool = False):
         """
         Print an info message.
 
         Args:
             message: Info message to display
+            force: If True, always print even in non-verbose mode
         """
-        self.console.print(f"[cyan]{message}[/cyan]")
+        if force or self.verbose:
+            self.console.print(f"[cyan]{message}[/cyan]")
