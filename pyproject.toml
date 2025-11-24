@@ -7,7 +7,7 @@ name = "spectest"
 version = "0.1.0"
 description = "CLI tool for testing model compliance with specifications using value tradeoff scenarios"
 authors = [
-    { name = "Spec Checker Contributors" }
+    { name = "James Sullivan" }
 ]
 readme = "README.md"
 requires-python = ">=3.9"

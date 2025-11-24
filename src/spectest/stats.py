@@ -61,9 +61,15 @@ class ComplianceStatistics:
         rate = (len(failures) / len(self.results)) * 100
         return rate, failures
 
-    def calculate_fleiss_kappa(self) -> float:
+    def calculate_fleiss_kappa(self, expected_judges: int = None) -> float:
         """
         Calculate Fleiss' Kappa for inter-rater agreement.
+
+        Note: Only includes scenarios where ALL judges provided responses.
+        Fleiss' Kappa requires a constant number of raters per item.
+
+        Args:
+            expected_judges: Expected number of judges (if None, uses max count)
 
         Returns:
             Fleiss' Kappa value (-1 to 1), where:
@@ -77,17 +83,34 @@ class ComplianceStatistics:
         if not self.results:
             return 0.0
 
+        # Determine expected number of judges
+        if expected_judges is None:
+            expected_judges = max(len(r.get("judgments", [])) for r in self.results)
+
+        # Filter to only scenarios where ALL judges responded
+        complete_results = [
+            r for r in self.results
+            if len(r.get("judgments", [])) == expected_judges
+        ]
+
+        if not complete_results:
+            logger.warning(
+                f"No scenarios with all {expected_judges} judges for Kappa calculation"
+            )
+            return 0.0
+
+        if expected_judges < 2:
+            logger.warning("Need at least 2 judges for Kappa calculation")
+            return 0.0
+
         # Build rating matrix: scenarios x categories
         categories = ["compliant", "non-compliant", "ambiguous"]
-        n_scenarios = len(self.results)
-        n_raters = len(self.results[0].get("judgments", [])) if self.results else 0
-
-        if n_scenarios == 0 or n_raters < 2:
-            return 0.0
+        n_scenarios = len(complete_results)
+        n_raters = expected_judges
 
         # Count ratings per category for each scenario
         rating_matrix = []
-        for result in self.results:
+        for result in complete_results:
             judgments = result.get("judgments", [])
             counts = [0, 0, 0]  # compliant, non-compliant, ambiguous
             for judgment in judgments:

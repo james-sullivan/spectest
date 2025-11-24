@@ -28,7 +28,7 @@ if "--verbose" not in sys.argv:
     with contextlib.redirect_stderr(_devnull):
         from .dataset import ScenarioDataset
         from .judge import ComplianceJudge
-    _devnull.close()
+    # Don't close _devnull - keeps file descriptor open to avoid issues
 else:
     from .dataset import ScenarioDataset
     from .judge import ComplianceJudge
@@ -260,15 +260,19 @@ async def async_main(
     # Evaluate all scenarios in parallel (each with 3 judges in parallel)
     eval_tasks = [evaluate_with_progress(r) for r in results]
     evaluation_results = []
-    total_evaluations = len(results) * len(judge.judge_models)
-    
+    expected_judgments = len(results) * len(judge.judge_models)
+    successful_judgments = 0
+
     try:
-        with tqdm(total=total_evaluations, desc="Evaluating compliance", unit="judgment") as pbar:
+        with tqdm(total=expected_judgments, desc="Evaluating compliance", unit="judgment") as pbar:
             for coro in asyncio.as_completed(eval_tasks):
                 eval_result = await coro
                 evaluation_results.append(eval_result)
-                # Update progress for number of judges (assuming 3 judges per scenario)
-                pbar.update(len(eval_result["judgments"]))
+                # Track successful judgments
+                num_judgments = len(eval_result["judgments"])
+                successful_judgments += num_judgments
+                # Update progress for number of judges that succeeded
+                pbar.update(num_judgments)
                 
                 # Write to JSONL file as each scenario completes
                 scenario_data = eval_result["scenario_data"]
@@ -294,21 +298,38 @@ async def async_main(
             formatter.print_error("Failed to evaluate any scenarios")
             sys.exit(1)
 
-        # Phase 4: Calculate statistics
-        stats = ComplianceStatistics(evaluation_results)
-        compliance_rate = stats.calculate_compliance_rate()
-        noncompliance_rate, failures = stats.calculate_frequent_noncompliance_rate()
-        kappa = stats.calculate_fleiss_kappa()
-        kappa_interpretation = stats.interpret_kappa(kappa)
+        # Show warning if some judgments failed
+        failed_judgments = expected_judgments - successful_judgments
+        if failed_judgments > 0:
+            formatter.print_warning(
+                f"{failed_judgments} of {expected_judgments} judgments failed. "
+                f"Statistics calculated from {successful_judgments} successful judgments."
+            )
 
-        # Phase 5: Display results
-        formatter.print_results(
-            compliance_rate=compliance_rate,
-            noncompliance_rate=noncompliance_rate,
-            failures=failures,
-            kappa=kappa,
-            kappa_interpretation=kappa_interpretation,
-        )
+        # Phase 4: Calculate statistics
+        try:
+            stats = ComplianceStatistics(evaluation_results)
+            compliance_rate = stats.calculate_compliance_rate()
+            noncompliance_rate, failures = stats.calculate_frequent_noncompliance_rate()
+            kappa = stats.calculate_fleiss_kappa(expected_judges=len(judge.judge_models))
+            kappa_interpretation = stats.interpret_kappa(kappa)
+
+            # Phase 5: Display results
+            formatter.print_results(
+                compliance_rate=compliance_rate,
+                noncompliance_rate=noncompliance_rate,
+                failures=failures,
+                kappa=kappa,
+                kappa_interpretation=kappa_interpretation,
+            )
+        except Exception as e:
+            logger.exception("Failed to calculate or display statistics")
+            formatter.print_error(f"Failed to calculate statistics: {e}")
+            formatter.print_info(
+                f"Evaluated {len(evaluation_results)} scenarios with "
+                f"{successful_judgments}/{expected_judgments} successful judgments.",
+                force=True
+            )
     finally:
         # Close output file
         output_file.close()

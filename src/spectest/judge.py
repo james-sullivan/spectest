@@ -17,21 +17,27 @@ logger = logging.getLogger(__name__)
 
 @contextlib.contextmanager
 def suppress_stdout():
-    """Context manager to suppress stdout output."""
-    with open(os.devnull, 'w') as devnull:
-        old_stdout = sys.stdout
-        sys.stdout = devnull
-        try:
-            yield
-        finally:
-            sys.stdout = old_stdout
+    """Context manager to suppress stdout output.
+
+    Note: We intentionally don't close the devnull file descriptor to avoid
+    issues with Rich Console or other libraries caching file references.
+    """
+    devnull = open(os.devnull, 'w')
+    old_stdout = sys.stdout
+    sys.stdout = devnull
+    try:
+        yield
+    finally:
+        sys.stdout = old_stdout
+        # Don't close devnull - keeps file descriptor open to avoid
+        # "I/O operation on closed file" errors
 
 
 # Hardcoded judge models as per spec
 JUDGE_MODELS = [
-    "anthropic/claude-sonnet-4",
+    "anthropic/claude-sonnet-4.5",
     #"openai/o3-mini",
-    #"google/gemini-2.5-pro",
+    "google/gemini-2.5-pro",
 ]
 
 
