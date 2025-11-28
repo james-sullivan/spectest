@@ -44,6 +44,8 @@ class OutputFormatter:
         total_cost: float = 0.0,
         total_input_tokens: int = 0,
         total_output_tokens: int = 0,
+        cache_enabled: bool = False,
+        cost_by_model: Dict[str, float] | None = None,
     ):
         """
         Print the final results summary.
@@ -92,9 +94,12 @@ class OutputFormatter:
 
         # Add cost information
         total_tokens = total_input_tokens + total_output_tokens
+        cost_str = f"${total_cost:.4f}"
+        if cache_enabled:
+            cost_str += " (max)"
         table.add_row(
             "Total Cost:",
-            f"[cyan]${total_cost:.4f}[/cyan]"
+            f"[cyan]{cost_str}[/cyan]"
         )
         table.add_row(
             "Total Tokens:",
@@ -102,6 +107,27 @@ class OutputFormatter:
         )
 
         self.console.print(table)
+
+        # Print cost breakdown by model
+        if cost_by_model:
+            from .pricing import get_model_pricing
+
+            self.console.print()
+            self.console.print("[bold]Cost by Model:[/bold]")
+            # Sort by cost descending
+            sorted_costs = sorted(cost_by_model.items(), key=lambda x: x[1], reverse=True)
+            for model_id, cost in sorted_costs:
+                # Get pricing rates for this model
+                input_rate, output_rate = get_model_pricing(model_id)
+                # Convert per-token to per-million for display
+                input_per_m = input_rate * 1_000_000
+                output_per_m = output_rate * 1_000_000
+
+                self.console.print(
+                    f"  {model_id}: [cyan]${cost:.4f}[/cyan] "
+                    f"[dim](${input_per_m:.2f}/${output_per_m:.2f} per 1M tok)[/dim]"
+                )
+
         self.console.file.flush()  # Ensure output is written
 
         # Print example failures

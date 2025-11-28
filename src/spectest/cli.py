@@ -34,6 +34,7 @@ else:
     from .judge import ComplianceJudge
 
 from .output import OutputFormatter
+from .pricing import calculate_cost
 from .stats import ComplianceStatistics
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,7 @@ async def async_main(
     total_cost = 0.0
     total_input_tokens = 0
     total_output_tokens = 0
+    cost_by_model: dict[str, float] = {}  # Track costs per model
 
     async def generate_with_id(scenario_data):
         """Helper to generate response and keep track of scenario data."""
@@ -236,14 +238,16 @@ async def async_main(
     # Generate all responses in parallel with progress bar
     tasks = [generate_with_id(s) for s in sampled_scenarios]
     results_with_none = []
-    for coro in async_tqdm.as_completed(tasks, desc="Generating responses", unit="scenario"):
+    for coro in async_tqdm.as_completed(tasks, desc="Generating responses", unit="scenario", file=sys.stderr):
         result = await coro
         results_with_none.append(result)
         # Track costs from response generation
         if result:
-            total_cost += result["cost"]
             total_input_tokens += result["input_tokens"]
             total_output_tokens += result["output_tokens"]
+            cost = calculate_cost(model, result["input_tokens"], result["output_tokens"])
+            total_cost += cost
+            cost_by_model[model] = cost_by_model.get(model, 0.0) + cost
 
     # Filter out None results
     results = [r for r in results_with_none if r is not None]
@@ -285,7 +289,7 @@ async def async_main(
     scenario_judgments = {r["scenario_id"]: {"judgments": [], "failed_judgments": [], "result": r} for r in results}
 
     try:
-        with tqdm(total=expected_judgments, desc="Evaluating compliance", unit="judgment") as pbar:
+        with tqdm(total=expected_judgments, desc="Evaluating compliance", unit="judgment", file=sys.stderr) as pbar:
             # Process judgments as they complete individually
             for coro in asyncio.as_completed(judge_tasks):
                 eval_result = await coro
@@ -294,9 +298,13 @@ async def async_main(
                 judgment = eval_result["judgment"]
 
                 # Track costs from judgments
-                total_cost += judgment.get("cost", 0.0)
-                total_input_tokens += judgment.get("input_tokens", 0)
-                total_output_tokens += judgment.get("output_tokens", 0)
+                input_tokens = judgment.get("input_tokens", 0)
+                output_tokens = judgment.get("output_tokens", 0)
+                total_input_tokens += input_tokens
+                total_output_tokens += output_tokens
+                cost = calculate_cost(judge_model, input_tokens, output_tokens)
+                total_cost += cost
+                cost_by_model[judge_model] = cost_by_model.get(judge_model, 0.0) + cost
 
                 # Categorize as success or failure
                 if judgment.get("success"):
@@ -349,8 +357,12 @@ async def async_main(
                     output_file.write(json.dumps(jsonl_entry) + "\n")
                     output_file.flush()  # Ensure it's written immediately
 
-        # Ensure a newline after progress bar before printing results
-        print()
+        # Reset terminal after tqdm progress bars to ensure clean output
+        # tqdm uses ANSI codes that can interfere with Rich console
+        if sys.stderr.isatty():
+            sys.stderr.write('\033[0m')  # Reset all attributes
+            sys.stderr.flush()
+        print()  # Newline on stdout
         sys.stdout.flush()
 
         # Convert scenario_judgments back to evaluation_results format
@@ -394,6 +406,8 @@ async def async_main(
                 total_cost=total_cost,
                 total_input_tokens=total_input_tokens,
                 total_output_tokens=total_output_tokens,
+                cache_enabled=(cache_dir is not None),
+                cost_by_model=cost_by_model,
             )
         except Exception as e:
             logger.exception("Failed to calculate or display statistics")
