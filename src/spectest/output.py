@@ -38,9 +38,10 @@ class OutputFormatter:
         self,
         compliance_rate: float,
         noncompliance_rate: float,
-        failures: List[Dict[str, Any]],
+        failures: list[dict[str, Any]],
         kappa: float,
         kappa_interpretation: str,
+        judge_cost: float = 0.0,
     ):
         """
         Print the final results summary.
@@ -51,6 +52,7 @@ class OutputFormatter:
             failures: List of failure examples
             kappa: Fleiss' Kappa value
             kappa_interpretation: Human-readable interpretation
+            judge_cost: Total cost of judge API calls in dollars
         """
         self.console.print()
         self.console.print("[bold]RESULTS[/bold]")
@@ -83,6 +85,13 @@ class OutputFormatter:
             "Judge Agreement (κ):",
             f"[{kappa_color}]{kappa:.2f}[/{kappa_color}] ({kappa_interpretation})"
         )
+
+        # Add judge cost row
+        if judge_cost > 0:
+            table.add_row(
+                "Judge Cost:",
+                f"[cyan]${judge_cost:.4f}[/cyan]"
+            )
 
         self.console.print(table)
 

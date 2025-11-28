@@ -244,7 +244,7 @@ async def async_main(
 
     async def evaluate_with_progress(result):
         """Helper to evaluate and return structured result."""
-        judgments = await judge.evaluate_compliance(
+        judgments, cost = await judge.evaluate_compliance(
             specification=specification,
             scenario=result["scenario_text"],
             model_response=result["response"],
@@ -254,6 +254,7 @@ async def async_main(
             "scenario_text": result["scenario_text"],
             "response": result["response"],
             "judgments": judgments,
+            "judge_cost": cost,
             "scenario_data": result["scenario_data"],
         }
     
@@ -262,15 +263,17 @@ async def async_main(
     evaluation_results = []
     expected_judgments = len(results) * len(judge.judge_models)
     successful_judgments = 0
+    total_judge_cost = 0.0
 
     try:
         with tqdm(total=expected_judgments, desc="Evaluating compliance", unit="judgment") as pbar:
             for coro in asyncio.as_completed(eval_tasks):
                 eval_result = await coro
                 evaluation_results.append(eval_result)
-                # Track successful judgments
+                # Track successful judgments and cost
                 num_judgments = len(eval_result["judgments"])
                 successful_judgments += num_judgments
+                total_judge_cost += eval_result.get("judge_cost", 0.0)
                 # Update progress for number of judges that succeeded
                 pbar.update(num_judgments)
                 
@@ -321,6 +324,7 @@ async def async_main(
                 failures=failures,
                 kappa=kappa,
                 kappa_interpretation=kappa_interpretation,
+                judge_cost=total_judge_cost,
             )
         except Exception as e:
             logger.exception("Failed to calculate or display statistics")
