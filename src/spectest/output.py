@@ -85,6 +85,7 @@ class OutputFormatter:
         )
 
         self.console.print(table)
+        self.console.file.flush()  # Ensure output is written
 
         # Print example failures
         if failures:
@@ -118,6 +119,7 @@ class OutputFormatter:
         self.console.print()
         self.console.print("[bold green]Done.[/bold green]")
         self.console.print()
+        self.console.file.flush()  # Ensure all output is written
 
     def print_error(self, message: str):
         """

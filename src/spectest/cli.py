@@ -119,7 +119,7 @@ def main(
     if not verbose:
         # Suppress logs from external libraries
         logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger("safetytooling").setLevel(logging.WARNING)
+        logging.getLogger("safetytooling").setLevel(logging.ERROR)
         logging.getLogger("datasets").setLevel(logging.WARNING)
         logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
@@ -242,57 +242,109 @@ async def async_main(
     # Phase 3: Judge evaluation in parallel
     formatter.print_info(f"Evaluating compliance with {len(judge.judge_models)} judges...")
 
-    async def evaluate_with_progress(result):
-        """Helper to evaluate and return structured result."""
-        judgments = await judge.evaluate_compliance(
+    # Create individual tasks for each (scenario, judge) combination
+    # This allows progress tracking per individual judgment instead of per scenario
+    async def evaluate_single_judge(result, judge_model):
+        """Evaluate a single scenario with a single judge."""
+        judgment = await judge._get_single_judgment(
+            judge_model=judge_model,
             specification=specification,
             scenario=result["scenario_text"],
             model_response=result["response"],
         )
         return {
             "scenario_id": result["scenario_id"],
-            "scenario_text": result["scenario_text"],
-            "response": result["response"],
-            "judgments": judgments,
-            "scenario_data": result["scenario_data"],
+            "judge_model": judge_model,
+            "judgment": judgment,
         }
-    
-    # Evaluate all scenarios in parallel (each with 3 judges in parallel)
-    eval_tasks = [evaluate_with_progress(r) for r in results]
-    evaluation_results = []
-    expected_judgments = len(results) * len(judge.judge_models)
+
+    # Create flat list of all (scenario, judge) tasks
+    judge_tasks = [
+        evaluate_single_judge(result, judge_model)
+        for result in results
+        for judge_model in judge.judge_models
+    ]
+
+    expected_judgments = len(judge_tasks)
     successful_judgments = 0
+
+    # Dictionary to accumulate judgments by scenario_id
+    scenario_judgments = {r["scenario_id"]: {"judgments": [], "failed_judgments": [], "result": r} for r in results}
 
     try:
         with tqdm(total=expected_judgments, desc="Evaluating compliance", unit="judgment") as pbar:
-            for coro in asyncio.as_completed(eval_tasks):
+            # Process judgments as they complete individually
+            for coro in asyncio.as_completed(judge_tasks):
                 eval_result = await coro
-                evaluation_results.append(eval_result)
-                # Track successful judgments
-                num_judgments = len(eval_result["judgments"])
-                successful_judgments += num_judgments
-                # Update progress for number of judges that succeeded
-                pbar.update(num_judgments)
-                
-                # Write to JSONL file as each scenario completes
-                scenario_data = eval_result["scenario_data"]
-                value_pairs = scenario_data.get("value_pairs", [])
-                value1 = value_pairs[0] if len(value_pairs) > 0 else ""
-                value2 = value_pairs[1] if len(value_pairs) > 1 else ""
+                scenario_id = eval_result["scenario_id"]
+                judge_model = eval_result["judge_model"]
+                judgment = eval_result["judgment"]
 
-                jsonl_entry = {
-                    "scenario_id": eval_result["scenario_id"],
-                    "scenario_text": eval_result["scenario_text"],
-                    "value1": value1,
-                    "value2": value2,
-                    "nudge_direction": scenario_data.get("nudge_direction", ""),
-                    "model": model,
-                    "spec_file": spec.name,
-                    "model_response": eval_result["response"],
-                    "judgments": eval_result["judgments"],
-                }
-                output_file.write(json.dumps(jsonl_entry) + "\n")
-                output_file.flush()  # Ensure it's written immediately
+                # Categorize as success or failure
+                if judgment.get("success"):
+                    scenario_judgments[scenario_id]["judgments"].append({
+                        "judge_model": judge_model,
+                        "reasoning": judgment["reasoning"],
+                        "judgment": judgment["judgment"],
+                    })
+                    successful_judgments += 1
+                else:
+                    scenario_judgments[scenario_id]["failed_judgments"].append({
+                        "judge_model": judge_model,
+                        "raw_response": judgment.get("raw_response", ""),
+                        "error": judgment.get("error", "Unknown error"),
+                    })
+
+                # Update progress bar for each individual judgment
+                pbar.update(1)
+
+                # Check if all judges for this scenario have completed
+                total_judgments_for_scenario = (
+                    len(scenario_judgments[scenario_id]["judgments"]) +
+                    len(scenario_judgments[scenario_id]["failed_judgments"])
+                )
+
+                # Write to JSONL file when all judges for a scenario are done
+                if total_judgments_for_scenario == len(judge.judge_models):
+                    result_data = scenario_judgments[scenario_id]["result"]
+                    scenario_data = result_data["scenario_data"]
+                    value_pairs = scenario_data.get("value_pairs", [])
+                    value1 = value_pairs[0] if len(value_pairs) > 0 else ""
+                    value2 = value_pairs[1] if len(value_pairs) > 1 else ""
+
+                    jsonl_entry = {
+                        "scenario_id": scenario_id,
+                        "scenario_text": result_data["scenario_text"],
+                        "value1": value1,
+                        "value2": value2,
+                        "nudge_direction": scenario_data.get("nudge_direction", ""),
+                        "model": model,
+                        "spec_file": spec.name,
+                        "model_response": result_data["response"],
+                        "judgments": scenario_judgments[scenario_id]["judgments"],
+                    }
+
+                    # Include failed_judgments only if there are any
+                    if scenario_judgments[scenario_id]["failed_judgments"]:
+                        jsonl_entry["failed_judgments"] = scenario_judgments[scenario_id]["failed_judgments"]
+
+                    output_file.write(json.dumps(jsonl_entry) + "\n")
+                    output_file.flush()  # Ensure it's written immediately
+
+        # Ensure a newline after progress bar before printing results
+        print()
+        sys.stdout.flush()
+
+        # Convert scenario_judgments back to evaluation_results format
+        evaluation_results = []
+        for scenario_id, scenario_data in scenario_judgments.items():
+            result = scenario_data["result"]
+            evaluation_results.append({
+                "scenario_id": scenario_id,
+                "scenario_text": result["scenario_text"],
+                "judgments": scenario_data["judgments"],
+                "failed_judgments": scenario_data["failed_judgments"],
+            })
 
         if not evaluation_results:
             formatter.print_error("Failed to evaluate any scenarios")
