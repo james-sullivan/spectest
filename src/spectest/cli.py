@@ -210,7 +210,12 @@ async def async_main(
 
     # Phase 2: Generate responses in parallel
     formatter.print_info("Generating responses...")
-    
+
+    # Initialize cost tracking
+    total_cost = 0.0
+    total_input_tokens = 0
+    total_output_tokens = 0
+
     async def generate_with_id(scenario_data):
         """Helper to generate response and keep track of scenario data."""
         response = await judge.generate_response(model, scenario_data["text"])
@@ -218,7 +223,10 @@ async def async_main(
             return {
                 "scenario_id": scenario_data["id"],
                 "scenario_text": scenario_data["text"],
-                "response": response,
+                "response": response["text"],
+                "cost": response["cost"],
+                "input_tokens": response["input_tokens"],
+                "output_tokens": response["output_tokens"],
                 "scenario_data": scenario_data,
             }
         else:
@@ -231,7 +239,12 @@ async def async_main(
     for coro in async_tqdm.as_completed(tasks, desc="Generating responses", unit="scenario"):
         result = await coro
         results_with_none.append(result)
-    
+        # Track costs from response generation
+        if result:
+            total_cost += result["cost"]
+            total_input_tokens += result["input_tokens"]
+            total_output_tokens += result["output_tokens"]
+
     # Filter out None results
     results = [r for r in results_with_none if r is not None]
 
@@ -279,6 +292,11 @@ async def async_main(
                 scenario_id = eval_result["scenario_id"]
                 judge_model = eval_result["judge_model"]
                 judgment = eval_result["judgment"]
+
+                # Track costs from judgments
+                total_cost += judgment.get("cost", 0.0)
+                total_input_tokens += judgment.get("input_tokens", 0)
+                total_output_tokens += judgment.get("output_tokens", 0)
 
                 # Categorize as success or failure
                 if judgment.get("success"):
@@ -373,6 +391,9 @@ async def async_main(
                 failures=failures,
                 kappa=kappa,
                 kappa_interpretation=kappa_interpretation,
+                total_cost=total_cost,
+                total_input_tokens=total_input_tokens,
+                total_output_tokens=total_output_tokens,
             )
         except Exception as e:
             logger.exception("Failed to calculate or display statistics")

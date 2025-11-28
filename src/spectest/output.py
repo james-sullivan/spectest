@@ -41,6 +41,9 @@ class OutputFormatter:
         failures: List[Dict[str, Any]],
         kappa: float,
         kappa_interpretation: str,
+        total_cost: float = 0.0,
+        total_input_tokens: int = 0,
+        total_output_tokens: int = 0,
     ):
         """
         Print the final results summary.
@@ -51,6 +54,9 @@ class OutputFormatter:
             failures: List of failure examples
             kappa: Fleiss' Kappa value
             kappa_interpretation: Human-readable interpretation
+            total_cost: Total API cost in USD
+            total_input_tokens: Total input tokens used
+            total_output_tokens: Total output tokens used
         """
         self.console.print()
         self.console.print("[bold]RESULTS[/bold]")
@@ -82,6 +88,17 @@ class OutputFormatter:
         table.add_row(
             "Judge Agreement (κ):",
             f"[{kappa_color}]{kappa:.2f}[/{kappa_color}] ({kappa_interpretation})"
+        )
+
+        # Add cost information
+        total_tokens = total_input_tokens + total_output_tokens
+        table.add_row(
+            "Total Cost:",
+            f"[cyan]${total_cost:.4f}[/cyan]"
+        )
+        table.add_row(
+            "Total Tokens:",
+            f"[cyan]{total_tokens:,}[/cyan] ({total_input_tokens:,} in / {total_output_tokens:,} out)"
         )
 
         self.console.print(table)

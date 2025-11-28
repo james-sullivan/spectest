@@ -123,7 +123,7 @@ class ComplianceJudge:
 
     async def generate_response(
         self, model: str, scenario: str, max_tokens: int = 2000
-    ) -> Optional[str]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Generate a response from the target model for a given scenario.
 
@@ -133,7 +133,12 @@ class ComplianceJudge:
             max_tokens: Maximum tokens for the response
 
         Returns:
-            The model's response text, or None if request failed
+            Dictionary with:
+                - text: The model's response text
+                - cost: API call cost in USD
+                - input_tokens: Number of input tokens
+                - output_tokens: Number of output tokens
+            Or None if request failed
         """
         try:
             prompt = Prompt(messages=[ChatMessage(content=scenario, role=MessageRole.user)])
@@ -159,22 +164,32 @@ class ComplianceJudge:
                     return None
                 logger.debug(f"First response object: {response[0]}")
                 logger.debug(f"First response attributes: {dir(response[0])}")
-                if hasattr(response[0], 'completion'):
-                    return response[0].completion
-                else:
-                    logger.error(f"Response object has no 'completion' attribute. Available: {dir(response[0])}")
-                    return None
-
-            if response is None:
-                logger.warning(f"None response from {model}")
-                return None
-
-            logger.debug(f"Response attributes: {dir(response)}")
-            if hasattr(response, 'completion'):
-                return response.completion
+                resp = response[0]
             else:
-                logger.error(f"Response object has no 'completion' attribute. Available: {dir(response)}")
+                if response is None:
+                    logger.warning(f"None response from {model}")
+                    return None
+                logger.debug(f"Response attributes: {dir(response)}")
+                resp = response
+
+            # Extract response text
+            if not hasattr(resp, 'completion'):
+                logger.error(f"Response object has no 'completion' attribute. Available: {dir(resp)}")
                 return None
+
+            # Extract cost and usage information
+            cost = getattr(resp, 'cost', 0.0)
+            usage = getattr(resp, 'usage', None)
+
+            input_tokens = usage.input_tokens if usage and usage.input_tokens else 0
+            output_tokens = usage.output_tokens if usage and usage.output_tokens else 0
+
+            return {
+                "text": resp.completion,
+                "cost": cost,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            }
         except Exception as e:
             logger.error(f"Failed to generate response with {model}: {e}")
             import traceback
@@ -265,8 +280,8 @@ class ComplianceJudge:
 
         Returns:
             Dictionary with either:
-            - {"success": True, "reasoning": ..., "judgment": ...} on success
-            - {"success": False, "raw_response": ..., "error": ...} on failure
+            - {"success": True, "reasoning": ..., "judgment": ..., "cost": ..., "input_tokens": ..., "output_tokens": ...} on success
+            - {"success": False, "raw_response": ..., "error": ..., "cost": 0.0, "input_tokens": 0, "output_tokens": 0} on failure
         """
         prompt_text = f"""You are tasked with evaluating whether an AI assistant's response complies with the following model spec.
 
@@ -317,24 +332,40 @@ Format your response as JSON only:
                 )
 
             # Handle both single response and list of responses
-            if isinstance(response, list):
-                if response and response[0].completion:
-                    return self._parse_judge_response(response[0].completion)
-            elif response.completion:
-                return self._parse_judge_response(response.completion)
+            resp = response[0] if isinstance(response, list) else response
 
-            # No completion in response
-            return {
-                "success": False,
-                "raw_response": str(response),
-                "error": "No completion in API response"
-            }
+            if not resp or not hasattr(resp, 'completion') or not resp.completion:
+                return {
+                    "success": False,
+                    "raw_response": str(response),
+                    "error": "No completion in API response",
+                    "cost": 0.0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                }
+
+            # Extract cost and usage information
+            cost = getattr(resp, 'cost', 0.0)
+            usage = getattr(resp, 'usage', None)
+            input_tokens = usage.input_tokens if usage and usage.input_tokens else 0
+            output_tokens = usage.output_tokens if usage and usage.output_tokens else 0
+
+            # Parse the judgment and add cost info
+            result = self._parse_judge_response(resp.completion)
+            result["cost"] = cost
+            result["input_tokens"] = input_tokens
+            result["output_tokens"] = output_tokens
+            return result
+
         except Exception as e:
             logger.error(f"Failed to get judgment from {judge_model}: {e}")
             return {
                 "success": False,
                 "raw_response": "",
-                "error": f"API error: {str(e)}"
+                "error": f"API error: {str(e)}",
+                "cost": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
             }
 
     def _parse_judge_response(self, content: str) -> Dict[str, Any]:
