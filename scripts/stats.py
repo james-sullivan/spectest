@@ -1,15 +1,88 @@
 """Statistical analysis for compliance evaluation."""
 
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def calculate_fleiss_kappa_from_judgments(
+    all_judgments: list[list[dict[str, Any]]],
+) -> float:
+    """
+    Calculate Fleiss' Kappa from list of judgment lists.
+
+    This is a simplified interface for use with InspectAI metrics.
+
+    Args:
+        all_judgments: List of judgment lists, where each judgment dict
+                      contains a "judgment" key with value
+                      "compliant", "non-compliant", or "ambiguous"
+
+    Returns:
+        Fleiss' Kappa value (-1 to 1)
+    """
+    if not all_judgments:
+        return 0.0
+
+    # Filter to samples with at least 2 judgments
+    valid_samples = [j for j in all_judgments if len(j) >= 2]
+    if not valid_samples:
+        return 0.0
+
+    # All samples should have same number of raters for Fleiss' Kappa
+    n_raters = len(valid_samples[0])
+    complete_samples = [j for j in valid_samples if len(j) == n_raters]
+
+    if not complete_samples:
+        return 0.0
+
+    n_scenarios = len(complete_samples)
+
+    # Build rating matrix: scenarios x categories
+    # Categories: [compliant, non-compliant, ambiguous]
+    rating_matrix = []
+    for judgments in complete_samples:
+        counts = [0, 0, 0]  # compliant, non-compliant, ambiguous
+        for j in judgments:
+            judgment = j.get("judgment", "ambiguous")
+            if judgment == "compliant":
+                counts[0] += 1
+            elif judgment == "non-compliant":
+                counts[1] += 1
+            else:
+                counts[2] += 1
+        rating_matrix.append(counts)
+
+    # Calculate P̄ (mean of Pᵢ values)
+    p_bar = 0.0
+    for counts in rating_matrix:
+        # Pᵢ = (1 / (n * (n-1))) * Σ(nᵢⱼ² - n)
+        sum_squares = sum(c * c for c in counts)
+        p_i = (sum_squares - n_raters) / (n_raters * (n_raters - 1))
+        p_bar += p_i
+    p_bar /= n_scenarios
+
+    # Calculate P̄ₑ (expected agreement by chance)
+    p_e = 0.0
+    for cat_idx in range(3):
+        # Proportion of ratings in this category across all scenarios
+        total_in_category = sum(row[cat_idx] for row in rating_matrix)
+        p_j = total_in_category / (n_scenarios * n_raters)
+        p_e += p_j * p_j
+
+    # Fleiss' Kappa = (P̄ - P̄ₑ) / (1 - P̄ₑ)
+    if p_e >= 1.0:
+        return 0.0
+
+    kappa = (p_bar - p_e) / (1.0 - p_e)
+    return kappa
 
 
 class ComplianceStatistics:
     """Calculate compliance statistics and inter-rater agreement."""
 
-    def __init__(self, results: List[Dict[str, Any]]):
+    def __init__(self, results: list[dict[str, Any]]):
         """
         Initialize statistics calculator.
 
@@ -38,7 +111,7 @@ class ComplianceStatistics:
 
         return (compliant_count / len(self.results)) * 100
 
-    def calculate_frequent_noncompliance_rate(self) -> Tuple[float, List[Dict[str, Any]]]:
+    def calculate_frequent_noncompliance_rate(self) -> tuple[float, list[dict[str, Any]]]:
         """
         Calculate percentage where ALL judges say "non-compliant" or "ambiguous".
 
@@ -147,7 +220,7 @@ class ComplianceStatistics:
         kappa = (p_bar - p_e) / (1.0 - p_e)
         return kappa
 
-    def _is_majority_compliant(self, judgments: List[Dict[str, Any]]) -> bool:
+    def _is_majority_compliant(self, judgments: list[dict[str, Any]]) -> bool:
         """
         Check if majority of judges say "compliant".
 
@@ -165,7 +238,7 @@ class ComplianceStatistics:
         )
         return compliant_count > len(judgments) / 2
 
-    def _is_unanimous_failure(self, judgments: List[Dict[str, Any]]) -> bool:
+    def _is_unanimous_failure(self, judgments: list[dict[str, Any]]) -> bool:
         """
         Check if ALL judges say "non-compliant" or "ambiguous".
 
